@@ -13,6 +13,13 @@ use uuid::Uuid;
 use crate::auth::Authenticator;
 use crate::shared::{proxy, ClientMessage, Delimited, ServerMessage, CONTROL_PORT};
 
+use axum::{
+    routing::get,
+    response::Json,
+    Router,
+};
+use serde_json::{Value, json};
+
 /// State structure for the server.
 pub struct Server {
     /// Range of TCP ports that can be forwarded.
@@ -43,6 +50,8 @@ impl Server {
         let listener = TcpListener::bind(&addr).await?;
         info!(?addr, "server listening");
 
+        this.listen_api().await;
+
         loop {
             let (stream, addr) = listener.accept().await?;
             let this = Arc::clone(&this);
@@ -58,6 +67,23 @@ impl Server {
                 .instrument(info_span!("control", ?addr)),
             );
         }
+    }
+
+    pub async fn listen_api(&self) {
+        let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
+        let listener = TcpListener::bind(&addr).await.unwrap();
+        info!(?addr, "api listening");
+
+        async fn response() -> Json<Value> {
+            let conns = Arc::clone(&self.conns);
+            for (key, value) in conns.iter() {
+                println!("{key}: {value}");
+            }
+            Json(json!({"a": 5}))
+        }
+
+        let app = Router::new().route("/", get(response));
+        axum::serve(listener, app).await.unwrap();
     }
 
     async fn create_listener(&self, port: u16) -> Result<TcpListener, &'static str> {
