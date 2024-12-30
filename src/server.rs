@@ -13,12 +13,8 @@ use uuid::Uuid;
 use crate::auth::Authenticator;
 use crate::shared::{proxy, ClientMessage, Delimited, ServerMessage, CONTROL_PORT};
 
-use axum::{
-    routing::get,
-    response::Json,
-    Router,
-};
-use serde_json::{Value, json};
+use axum::{response::Json, routing::get, Router};
+use serde_json::{json, Value};
 
 /// State structure for the server.
 pub struct Server {
@@ -50,7 +46,10 @@ impl Server {
         let listener = TcpListener::bind(&addr).await?;
         info!(?addr, "server listening");
 
-        this.listen_api().await;
+        let api_server = Arc::clone(&this);
+        tokio::spawn(async move {
+            api_server.listen_api().await;
+        });
 
         loop {
             let (stream, addr) = listener.accept().await?;
@@ -69,20 +68,24 @@ impl Server {
         }
     }
 
-    pub async fn listen_api(&self) {
+    /// Listen for API requests.
+    pub async fn listen_api(self: Arc<Self>) {
         let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
         let listener = TcpListener::bind(&addr).await.unwrap();
         info!(?addr, "api listening");
 
-        async fn response() -> Json<Value> {
-            let conns = Arc::clone(&self.conns);
-            for (key, value) in conns.iter() {
-                println!("{key}: {value}");
+        let conns = Arc::clone(&self.conns);
+        async fn response(conns: Arc<DashMap<Uuid, TcpStream>>) -> Json<Value> {
+            let mut connections = Vec::new();
+            for entry in conns.iter() {
+                let key = entry.key().to_string();
+                let value = format!("{:?}", entry.value());
+                connections.push(json!({ "id": key, "connection": value }));
             }
-            Json(json!({"a": 5}))
+            Json(json!({ "connections": connections }))
         }
 
-        let app = Router::new().route("/", get(response));
+        let app = Router::new().route("/", get(move || response(Arc::clone(&conns))));
         axum::serve(listener, app).await.unwrap();
     }
 
